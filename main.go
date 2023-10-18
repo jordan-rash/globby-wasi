@@ -36,7 +36,12 @@ func (g *Globby) Handle(req globby.WasiHttpIncomingHandlerIncomingRequest, resp 
 
 		exists := globby.WasiBlobstoreContainerHasObject(container.Unwrap(), trimmedPath[0])
 		if exists.IsErr() {
-			writeHttpResponse(resp, http.StatusNoContent, []globby.WasiHttpTypesTuple2StringListU8TT{{F0: "Content-Type", F1: []byte("application/json")}}, []byte("{\"error\":\""+path+":"+exists.UnwrapErr()+"}"))
+			writeHttpResponse(resp, http.StatusInternalServerError, []globby.WasiHttpTypesTuple2StringListU8TT{{F0: "Content-Type", F1: []byte("application/json")}}, []byte("{\"error\":\""+path+":"+exists.UnwrapErr()+"}"))
+			return
+		}
+
+		if !exists.Val {
+			writeHttpResponse(resp, http.StatusNotFound, []globby.WasiHttpTypesTuple2StringListU8TT{{F0: "Content-Type", F1: []byte("application/json")}}, []byte("{\"msg\":\"file does not exist\"}"))
 			return
 		}
 
