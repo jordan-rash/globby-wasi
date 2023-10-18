@@ -1,0 +1,8 @@
+package wasmcloud:globby
+
+world globby {
+    import wasi:blobstore/blobstore
+    import wasi:logging/logging
+
+    export wasi:http/incoming-handler
+}
