@@ -26,13 +26,19 @@ func (g *Globby) Handle(req globby.WasiHttpIncomingHandlerIncomingRequest, resp 
 
 	path := splitPathQuery[0]
 	trimmedPath := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	switch {
-	case method == globby.WasiHttpTypesMethodGet():
-		container := globby.WasiBlobstoreBlobstoreGetContainer(DEFAULT_CONTAINER_NAME)
+
+	container := globby.WasiBlobstoreBlobstoreGetContainer(DEFAULT_CONTAINER_NAME)
+	if container.IsErr() {
+		globby.WasiLoggingLoggingLog(globby.WasiLoggingLoggingLevelDebug(), "create_container", DEFAULT_CONTAINER_NAME+" did not exist -> creating")
+		container = globby.WasiBlobstoreBlobstoreCreateContainer(DEFAULT_CONTAINER_NAME)
 		if container.IsErr() {
 			writeHttpResponse(resp, http.StatusNotFound, []globby.WasiHttpTypesTuple2StringListU8TT{{F0: "Content-Type", F1: []byte("application/json")}}, []byte("{\"error\":\""+path+":"+container.UnwrapErr()+"}"))
 			return
 		}
+	}
+
+	switch {
+	case method == globby.WasiHttpTypesMethodGet():
 
 		exists := globby.WasiBlobstoreContainerHasObject(container.Unwrap(), trimmedPath[0])
 		if exists.IsErr() {
@@ -59,11 +65,6 @@ func (g *Globby) Handle(req globby.WasiHttpIncomingHandlerIncomingRequest, resp 
 
 		writeHttpResponse(resp, http.StatusOK, []globby.WasiHttpTypesTuple2StringListU8TT{{F0: "Content-Type", F1: []byte("application/text")}}, data.Unwrap())
 	case method == globby.WasiHttpTypesMethodPost():
-		container := globby.WasiBlobstoreBlobstoreGetContainer(DEFAULT_CONTAINER_NAME)
-		if container.IsErr() {
-			writeHttpResponse(resp, http.StatusNotFound, []globby.WasiHttpTypesTuple2StringListU8TT{{F0: "Content-Type", F1: []byte("application/json")}}, []byte("{\"error\":\""+path+":"+container.UnwrapErr()+"}"))
-			return
-		}
 
 		bodyStream := globby.WasiHttpTypesIncomingRequestConsume(req) // incoming-body
 		if bodyStream.IsErr() {
@@ -96,11 +97,6 @@ func (g *Globby) Handle(req globby.WasiHttpIncomingHandlerIncomingRequest, resp 
 
 		writeHttpResponse(resp, http.StatusOK, []globby.WasiHttpTypesTuple2StringListU8TT{{F0: "Content-Type", F1: []byte("application/json")}}, []byte("{\"msg\":\""+path+": uploaded\"}"))
 	case method == globby.WasiHttpTypesMethodDelete():
-		container := globby.WasiBlobstoreBlobstoreGetContainer(DEFAULT_CONTAINER_NAME)
-		if container.IsErr() {
-			writeHttpResponse(resp, http.StatusNotFound, []globby.WasiHttpTypesTuple2StringListU8TT{{F0: "Content-Type", F1: []byte("application/json")}}, []byte("{\"error\":\""+path+":"+container.UnwrapErr()+"}"))
-			return
-		}
 
 		del := globby.WasiBlobstoreContainerDeleteObject(container.Val, trimmedPath[0])
 		if del.IsErr() {
