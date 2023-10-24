@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	globby "globby/gen"
 	"net/http"
 	"strings"
@@ -39,7 +40,7 @@ func (g *Globby) Handle(req globby.WasiHttpIncomingHandlerIncomingRequest, resp 
 
 	switch {
 	case method == globby.WasiHttpTypesMethodGet():
-
+		globby.WasiLoggingLoggingLog(globby.WasiLoggingLoggingLevelDebug(), "Handle", "inside GET")
 		exists := globby.WasiBlobstoreContainerHasObject(container.Unwrap(), trimmedPath[0])
 		if exists.IsErr() {
 			writeHttpResponse(resp, http.StatusInternalServerError, []globby.WasiHttpTypesTuple2StringListU8TT{{F0: "Content-Type", F1: []byte("application/json")}}, []byte("{\"error\":\""+path+":"+exists.UnwrapErr()+"}"))
@@ -51,20 +52,24 @@ func (g *Globby) Handle(req globby.WasiHttpIncomingHandlerIncomingRequest, resp 
 			return
 		}
 
+		globby.WasiLoggingLoggingLog(globby.WasiLoggingLoggingLevelDebug(), "Handle", "creating blobstore stream")
 		dataStream := globby.WasiBlobstoreContainerGetData(container.Unwrap(), trimmedPath[0], 0, 18446744073709551614)
 		if dataStream.IsErr() {
 			writeHttpResponse(resp, http.StatusInternalServerError, []globby.WasiHttpTypesTuple2StringListU8TT{{F0: "Content-Type", F1: []byte("application/json")}}, []byte("{\"error\":\""+path+":"+dataStream.UnwrapErr()+"}"))
 			return
 		}
 
+		globby.WasiLoggingLoggingLog(globby.WasiLoggingLoggingLevelDebug(), "Handle", "reading blobstore stream")
 		data := globby.WasiBlobstoreTypesIncomingValueConsumeSync(dataStream.Unwrap())
 		if data.IsErr() {
 			writeHttpResponse(resp, http.StatusInternalServerError, []globby.WasiHttpTypesTuple2StringListU8TT{{F0: "Content-Type", F1: []byte("application/json")}}, []byte("{\"error\":\""+path+":"+data.UnwrapErr()+"}"))
 			return
 		}
 
-		writeHttpResponse(resp, http.StatusOK, []globby.WasiHttpTypesTuple2StringListU8TT{{F0: "Content-Type", F1: []byte("application/text")}}, data.Unwrap())
+		globby.WasiLoggingLoggingLog(globby.WasiLoggingLoggingLevelDebug(), "Handle", "writing data")
+		writeHttpResponse(resp, http.StatusOK, []globby.WasiHttpTypesTuple2StringListU8TT{}, data.Unwrap())
 	case method == globby.WasiHttpTypesMethodPost():
+		globby.WasiLoggingLoggingLog(globby.WasiLoggingLoggingLevelDebug(), "Handle", "inside POST")
 
 		bodyStream := globby.WasiHttpTypesIncomingRequestConsume(req) // incoming-body
 		if bodyStream.IsErr() {
@@ -72,22 +77,60 @@ func (g *Globby) Handle(req globby.WasiHttpIncomingHandlerIncomingRequest, resp 
 			return
 		}
 
+		globby.WasiLoggingLoggingLog(globby.WasiLoggingLoggingLevelDebug(), "Handle", "1")
+
+		var data []byte
 		readStream := globby.WasiIoStreamsBlockingRead(bodyStream.Val, 18446744073709551614)
-		globby.WasiLoggingLoggingLog(globby.WasiLoggingLoggingLevelInfo(), "STREAM DATA", string(readStream.Val.F0))
+		for readStream.Val.F1 == globby.WasiIoStreamsStreamStatusOpen() {
+			data = append(data, readStream.Val.F0...)
+			readStream = globby.WasiIoStreamsBlockingRead(bodyStream.Val, 18446744073709551614)
+		}
 
 		outgoingValue := globby.WasiBlobstoreTypesNewOutgoingValue()
 		outStream := globby.WasiBlobstoreTypesOutgoingValueWriteBody(outgoingValue)
 
-		cw := globby.WasiIoStreamsCheckWrite(outStream.Val)
-		if cw.IsErr() {
-			writeHttpResponse(resp, http.StatusInternalServerError, []globby.WasiHttpTypesTuple2StringListU8TT{{F0: "Content-Type", F1: []byte("application/json")}}, []byte("{\"error\":\"failed check write\"}"))
+		// -------------------------------------------------------------------------------------------
+
+		pollable := globby.WasiIoStreamsSubscribeToOutputStream(outStream.Val)
+
+		bIndex := 0
+		for bIndex < len(data) {
+			if globby.WasiPollPollPollOneoff([]uint32{pollable})[0] {
+				globby.WasiLoggingLoggingLog(globby.WasiLoggingLoggingLevelDebug(), "Handle", fmt.Sprintf("inside loop - bIndex: %d", bIndex))
+
+				cw := globby.WasiIoStreamsCheckWrite(outStream.Val)
+				if cw.IsErr() {
+					return
+				}
+
+				globby.WasiLoggingLoggingLog(globby.WasiLoggingLoggingLevelDebug(), "Handle", fmt.Sprintf("inside loop - checkWrite: %d", cw.Val))
+
+				if int(cw.Val) > len(data) {
+					cw.Val = uint64(len(data))
+				}
+
+				globby.WasiLoggingLoggingLog(globby.WasiLoggingLoggingLevelDebug(), "Handle", fmt.Sprintf("inside loop - writing: %d-%d", bIndex, cw.Val))
+				w := globby.WasiIoStreamsWrite(outStream.Val, data[bIndex:int(cw.Val)])
+				if w.IsErr() {
+					globby.WasiLoggingLoggingLog(globby.WasiLoggingLoggingLevelError(), "Handle", fmt.Sprintf("failed to write to stream: %v", w.UnwrapErr()))
+					return
+				}
+
+				bIndex = int(cw.Val) + 1
+			}
+		}
+
+		f := globby.WasiIoStreamsFlush(outStream.Val)
+		if f.IsErr() {
+			globby.WasiLoggingLoggingLog(globby.WasiLoggingLoggingLevelError(), "Handle", fmt.Sprintf("failed to flush to stream: %v", f.UnwrapErr()))
 			return
 		}
 
-		wf := globby.WasiIoStreamsBlockingWriteAndFlush(outStream.Val, readStream.Val.F0)
-		if wf.IsErr() {
-			return
-		}
+		// NOTE: I dont know why we have to do these two steps
+		globby.WasiPollPollPollOneoff([]uint32{pollable})
+		globby.WasiIoStreamsCheckWrite(outStream.Val)
+
+		// -------------------------------------------------------------------------------------------
 
 		wd := globby.WasiBlobstoreContainerWriteData(container.Unwrap(), trimmedPath[0], outgoingValue)
 		if wd.IsErr() {
@@ -113,6 +156,8 @@ func (g *Globby) Handle(req globby.WasiHttpIncomingHandlerIncomingRequest, resp 
 }
 
 func writeHttpResponse(responseOutparam globby.WasiHttpTypesResponseOutparam, statusCode uint16, inHeaders []globby.WasiHttpTypesTuple2StringListU8TT, body []byte) {
+	globby.WasiLoggingLoggingLog(globby.WasiLoggingLoggingLevelDebug(), "writeHttpResponse", fmt.Sprintf("writing response: len=%d", len(body)))
+
 	headers := globby.WasiHttpTypesNewFields(inHeaders)
 
 	outgoingResponse := globby.WasiHttpTypesNewOutgoingResponse(statusCode, headers)
@@ -125,17 +170,46 @@ func writeHttpResponse(responseOutparam globby.WasiHttpTypesResponseOutparam, st
 		return
 	}
 
-	cw := globby.WasiIoStreamsCheckWrite(outgoingStream.Val)
-	if cw.IsErr() {
-		return
+	pollable := globby.WasiIoStreamsSubscribeToOutputStream(outgoingStream.Val)
+
+	bIndex := 0
+	for bIndex < len(body) {
+		if globby.WasiPollPollPollOneoff([]uint32{pollable})[0] {
+			globby.WasiLoggingLoggingLog(globby.WasiLoggingLoggingLevelDebug(), "writeHttpResponse", fmt.Sprintf("inside loop - bIndex: %d", bIndex))
+
+			cw := globby.WasiIoStreamsCheckWrite(outgoingStream.Val)
+			if cw.IsErr() {
+				return
+			}
+
+			globby.WasiLoggingLoggingLog(globby.WasiLoggingLoggingLevelDebug(), "writeHttpResponse", fmt.Sprintf("inside loop - checkWrite: %d", cw.Val))
+
+			if int(cw.Val) > len(body) {
+				cw.Val = uint64(len(body))
+			}
+
+			globby.WasiLoggingLoggingLog(globby.WasiLoggingLoggingLevelDebug(), "writeHttpResponse", fmt.Sprintf("inside loop - writing: %d-%d", bIndex, cw.Val))
+			w := globby.WasiIoStreamsWrite(outgoingStream.Val, body[bIndex:int(cw.Val)])
+			if w.IsErr() {
+				globby.WasiLoggingLoggingLog(globby.WasiLoggingLoggingLevelError(), "writeHttpResponse", fmt.Sprintf("failed to write to stream: %v", w.UnwrapErr()))
+				return
+			}
+
+			bIndex = int(cw.Val) + 1
+		}
 	}
 
-	wf := globby.WasiIoStreamsBlockingWriteAndFlush(outgoingStream.Val, body)
-	if wf.IsErr() {
+	f := globby.WasiIoStreamsFlush(outgoingStream.Val)
+	if f.IsErr() {
+		globby.WasiLoggingLoggingLog(globby.WasiLoggingLoggingLevelError(), "writeHttpResponse", fmt.Sprintf("failed to flush to stream: %v", f.UnwrapErr()))
 		return
 	}
 
 	globby.WasiHttpTypesFinishOutgoingStream(outgoingStream.Val)
+
+	// NOTE: I dont know why we have to do these two steps
+	globby.WasiPollPollPollOneoff([]uint32{pollable})
+	globby.WasiIoStreamsCheckWrite(outgoingStream.Val)
 
 	outparm := globby.WasiHttpTypesSetResponseOutparam(responseOutparam, outgoingResponse)
 	if outparm.IsErr() {
