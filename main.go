@@ -28,6 +28,11 @@ func (g *Globby) Handle(req globby.WasiHttpIncomingHandlerIncomingRequest, resp 
 	path := splitPathQuery[0]
 	trimmedPath := strings.Split(strings.TrimPrefix(path, "/"), "/")
 
+	if trimmedPath[0] == "" || trimmedPath[0] == "/" {
+		writeHttpResponse(resp, http.StatusNotFound, []globby.WasiHttpTypesTuple2StringListU8TT{{F0: "Content-Type", F1: []byte("application/json")}}, []byte("{\"error\":\"please provide a file name -> 'example.com/myfile.txt'\"}"))
+		return
+	}
+
 	container := globby.WasiBlobstoreBlobstoreGetContainer(DEFAULT_CONTAINER_NAME)
 	if container.IsErr() {
 		globby.WasiLoggingLoggingLog(globby.WasiLoggingLoggingLevelDebug(), "create_container", DEFAULT_CONTAINER_NAME+" did not exist -> creating")
